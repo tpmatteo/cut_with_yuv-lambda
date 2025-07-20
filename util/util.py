@@ -8,6 +8,7 @@ import importlib
 import argparse
 from argparse import Namespace
 import torchvision
+import gc
 
 
 def str2bool(v):
@@ -205,3 +206,160 @@ def yuv_to_rgb(img):
     if len(original_shape) == 3:
         rgb = rgb.squeeze(0)
     return rgb
+
+
+def clear_cuda_memory():
+    """Clear CUDA memory cache and garbage collect to free up memory"""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    gc.collect()
+
+
+def get_cuda_memory_info():
+    """Get detailed CUDA memory information"""
+    if not torch.cuda.is_available():
+        return "CUDA not available"
+    
+    memory_info = {}
+    memory_info['allocated'] = torch.cuda.memory_allocated() / 1024**3  # GB
+    memory_info['cached'] = torch.cuda.memory_reserved() / 1024**3  # GB
+    memory_info['max_allocated'] = torch.cuda.max_memory_allocated() / 1024**3  # GB
+    memory_info['max_cached'] = torch.cuda.max_memory_reserved() / 1024**3  # GB
+    
+    # Get total GPU memory
+    total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3  # GB
+    memory_info['total'] = total_memory
+    memory_info['free'] = total_memory - memory_info['cached']
+    
+    return memory_info
+
+
+def print_cuda_memory_info():
+    """Print current CUDA memory usage"""
+    memory_info = get_cuda_memory_info()
+    if isinstance(memory_info, str):
+        print(memory_info)
+        return
+    
+    print("CUDA Memory Usage:")
+    print(f"  Allocated: {memory_info['allocated']:.2f} GB")
+    print(f"  Cached: {memory_info['cached']:.2f} GB")
+    print(f"  Free: {memory_info['free']:.2f} GB")
+    print(f"  Total: {memory_info['total']:.2f} GB")
+    print(f"  Max Allocated: {memory_info['max_allocated']:.2f} GB")
+    print(f"  Max Cached: {memory_info['max_cached']:.2f} GB")
+
+
+def safe_tensor_to_cpu(tensor):
+    """Safely move tensor to CPU and clear GPU memory"""
+    if tensor is None:
+        return None
+    
+    if tensor.is_cuda:
+        tensor_cpu = tensor.detach().cpu()
+        del tensor
+        return tensor_cpu
+    return tensor
+
+
+def cleanup_model_memory(model):
+    """Clean up model memory by moving to CPU and clearing cache"""
+    if hasattr(model, 'model_names'):
+        for name in model.model_names:
+            if isinstance(name, str):
+                net = getattr(model, 'net' + name, None)
+                if net is not None and hasattr(net, 'cpu'):
+                    net.cpu()
+    
+    # Clear any cached tensors
+    if hasattr(model, 'real_A'):
+        del model.real_A
+    if hasattr(model, 'real_B'):
+        del model.real_B
+    if hasattr(model, 'fake_B'):
+        del model.fake_B
+    if hasattr(model, 'idt_B'):
+        del model.idt_B
+    
+    clear_cuda_memory()
+
+
+def enable_memory_efficient_settings():
+    """Enable memory-efficient PyTorch settings"""
+    # Set environment variables for memory efficiency
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+    
+    # Enable memory efficient attention if available
+    if hasattr(torch.backends, 'cuda') and hasattr(torch.backends.cuda, 'enable_flash_sdp'):
+        torch.backends.cuda.enable_flash_sdp(True)
+    
+    print("Memory-efficient settings enabled.")
+
+
+def set_cuda_memory_fraction(fraction=0.8):
+    """Set CUDA memory fraction to limit memory usage"""
+    if torch.cuda.is_available():
+        torch.cuda.set_per_process_memory_fraction(fraction)
+        print(f"CUDA memory fraction set to {fraction}")
+    else:
+        print("CUDA not available")
+
+
+def estimate_memory_usage_for_image(image_size, batch_size=1, channels=3):
+    """Estimate GPU memory usage for processing an image of given size"""
+    if not torch.cuda.is_available():
+        return 0
+    
+    # More realistic estimation for GAN models:
+    # - Input tensor: 4 bytes per float32
+    # - Generator: typically 4-6x input size
+    # - Discriminator: typically 2-3x input size  
+    # - Intermediate activations: 3-4x input size
+    # - CUDA overhead: ~30%
+    
+    input_memory = image_size[0] * image_size[1] * batch_size * channels * 4 / (1024**3)  # GB
+    
+    # For inference (test mode), we mainly need generator + activations
+    # Conservative estimate: 6x input size for GAN models during inference
+    estimated_memory = input_memory * 6 * 1.3  # 30% overhead
+    
+    return estimated_memory
+
+
+def get_safe_image_size(max_memory_gb=8.0, batch_size=1, channels=3):
+    """Calculate a safe image size that won't exceed the specified memory limit"""
+    if not torch.cuda.is_available():
+        return (512, 512)  # Default safe size
+    
+    # Start with a reasonable size and calculate memory usage
+    base_size = 256
+    memory_usage = estimate_memory_usage_for_image((base_size, base_size), batch_size, channels)
+    
+    # Scale up until we approach the memory limit
+    while memory_usage < max_memory_gb * 0.6:  # Use 60% of available memory for safety
+        base_size *= 1.4
+        memory_usage = estimate_memory_usage_for_image((base_size, base_size), batch_size, channels)
+    
+    # Scale back down to be safe
+    safe_size = int(base_size / 1.4)
+    return (safe_size, safe_size)
+
+
+def check_memory_before_processing(image_size, batch_size=1, channels=3, safety_margin=0.2):
+    """Check if there's enough memory to process an image of given size"""
+    if not torch.cuda.is_available():
+        return True
+    
+    # Get current memory info
+    memory_info = get_cuda_memory_info()
+    if isinstance(memory_info, str):
+        return True
+    
+    # Estimate required memory
+    required_memory = estimate_memory_usage_for_image(image_size, batch_size, channels)
+    
+    # Check if we have enough free memory
+    available_memory = memory_info['free'] * (1 - safety_margin)
+    
+    return required_memory <= available_memory

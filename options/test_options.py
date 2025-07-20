@@ -19,6 +19,10 @@ class TestOptions(BaseOptions):
         parser.add_argument('--yuv', action='store_true', help='If specified, use YUV color space for NCE loss and optionally GAN')
         parser.add_argument('--lambda_NCE_Y', type=float, default=0.0, help='weight for NCE loss on Y channel in YUV')
 
+        # Memory management options for testing
+        parser.add_argument('--cuda_memory_fraction', type=float, default=0.8, help='fraction of GPU memory to use (0.0-1.0)')
+        parser.add_argument('--memory_clear_freq', type=int, default=5, help='frequency of clearing CUDA memory cache during testing')
+
         # To avoid cropping, the load_size should be the same as crop_size
         parser.set_defaults(load_size=parser.get_default('crop_size'))
         self.isTrain = False

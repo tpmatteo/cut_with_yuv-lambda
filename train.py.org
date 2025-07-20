@@ -4,19 +4,10 @@ from options.train_options import TrainOptions
 from data import create_dataset
 from models import create_model
 from util.visualizer import Visualizer
-from util import util
 
 
 if __name__ == '__main__':
     opt = TrainOptions().parse()   # get training options
-    
-    # Enable memory-efficient settings
-    util.enable_memory_efficient_settings()
-    
-    # Set memory fraction if specified
-    if hasattr(opt, 'cuda_memory_fraction') and opt.cuda_memory_fraction < 1.0:
-        util.set_cuda_memory_fraction(opt.cuda_memory_fraction)
-    
     dataset = create_dataset(opt)  # create a dataset given opt.dataset_mode and other options
     dataset_size = len(dataset)    # get the number of images in the dataset.
 
@@ -28,11 +19,6 @@ if __name__ == '__main__':
     total_iters = 0                # the total number of training iterations
 
     optimize_time = 0.1
-
-    # Print initial memory usage
-    if len(opt.gpu_ids) > 0:
-        print("Initial CUDA memory usage:")
-        util.print_cuda_memory_info()
 
     times = []
     for epoch in range(opt.epoch_count, opt.n_epochs + opt.n_epochs_decay + 1):    # outer loop for different epochs; we save the model by <epoch_count>, <epoch_count>+<save_latest_freq>
@@ -73,25 +59,12 @@ if __name__ == '__main__':
                 visualizer.print_current_losses(epoch, epoch_iter, losses, optimize_time, t_data)
                 if opt.display_id is None or opt.display_id > 0:
                     visualizer.plot_current_losses(epoch, float(epoch_iter) / dataset_size, losses)
-                
-                # Print memory usage periodically
-                if len(opt.gpu_ids) > 0 and total_iters % (opt.print_freq * 10) == 0:
-                    print("Memory usage at iteration %d:" % total_iters)
-                    util.print_cuda_memory_info()
-
-            # Clear memory periodically based on frequency setting
-            if len(opt.gpu_ids) > 0 and total_iters % opt.memory_clear_freq == 0:
-                util.clear_cuda_memory()
 
             if total_iters % opt.save_latest_freq == 0:   # cache our latest model every <save_latest_freq> iterations
                 print('saving the latest model (epoch %d, total_iters %d)' % (epoch, total_iters))
                 print(opt.name)  # it's useful to occasionally show the experiment name on console
                 save_suffix = 'iter_%d' % total_iters if opt.save_by_iter else 'latest'
                 model.save_networks(save_suffix)
-                
-                # Clear memory after saving
-                if len(opt.gpu_ids) > 0:
-                    util.clear_cuda_memory()
 
             iter_data_time = time.time()
 
@@ -99,21 +72,6 @@ if __name__ == '__main__':
             print('saving the model at the end of epoch %d, iters %d' % (epoch, total_iters))
             model.save_networks('latest')
             model.save_networks(epoch)
-            
-            # Clear memory after epoch save
-            if len(opt.gpu_ids) > 0:
-                util.clear_cuda_memory()
 
         print('End of epoch %d / %d \t Time Taken: %d sec' % (epoch, opt.n_epochs + opt.n_epochs_decay, time.time() - epoch_start_time))
         model.update_learning_rate()                     # update learning rates at the end of every epoch.
-        
-        # Clear memory at the end of each epoch
-        if len(opt.gpu_ids) > 0:
-            util.clear_cuda_memory()
-
-    # Final cleanup
-    print("Training completed. Final memory cleanup...")
-    if len(opt.gpu_ids) > 0:
-        util.cleanup_model_memory(model)
-        print("Final CUDA memory usage:")
-        util.print_cuda_memory_info()

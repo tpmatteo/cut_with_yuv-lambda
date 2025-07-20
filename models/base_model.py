@@ -174,8 +174,13 @@ class BaseModel(ABC):
                 net = getattr(self, 'net' + name)
 
                 if len(self.gpu_ids) > 0 and torch.cuda.is_available():
-                    torch.save(net.module.cpu().state_dict(), save_path)
-                    net.cuda(self.gpu_ids[0])
+                    # Move network to CPU for saving
+                    net_cpu = net.module.cpu() if hasattr(net, 'module') else net.cpu()
+                    torch.save(net_cpu.state_dict(), save_path)
+                    # Move back to GPU
+                    net_cpu.cuda(self.gpu_ids[0])
+                    # Clear CPU memory
+                    del net_cpu
                 else:
                     torch.save(net.cpu().state_dict(), save_path)
 

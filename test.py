@@ -37,6 +37,19 @@ import util.util as util
 
 if __name__ == '__main__':
     opt = TestOptions().parse()  # get test options
+    
+    # Enable memory-efficient settings
+    util.enable_memory_efficient_settings()
+    
+    # Set memory fraction if specified
+    if hasattr(opt, 'cuda_memory_fraction') and opt.cuda_memory_fraction < 1.0:
+        util.set_cuda_memory_fraction(opt.cuda_memory_fraction)
+    
+    # Print initial memory usage
+    if len(opt.gpu_ids) > 0:
+        print("Initial CUDA memory usage:")
+        util.print_cuda_memory_info()
+    
     # hard-code some parameters for test
     opt.num_threads = 0   # test code only supports num_threads = 1
     opt.batch_size = 1    # test code only supports batch_size = 1
@@ -58,13 +71,39 @@ if __name__ == '__main__':
             model.parallelize()
             if opt.eval:
                 model.eval()
+            
+            # Clear memory after model initialization
+            if len(opt.gpu_ids) > 0:
+                util.clear_cuda_memory()
+                print("Memory usage after model initialization:")
+                util.print_cuda_memory_info()
+        
         if i >= opt.num_test:  # only apply our model to opt.num_test images.
             break
+        
         model.set_input(data)  # unpack data from data loader
         model.test()           # run inference
         visuals = model.get_current_visuals()  # get image results
         img_path = model.get_image_paths()     # get image paths
+        
         if i % 5 == 0:  # save images to an HTML file
             print('processing (%04d)-th image... %s' % (i, img_path))
+            # Print memory usage every 5 images
+            if len(opt.gpu_ids) > 0:
+                print("Memory usage at image %d:" % i)
+                util.print_cuda_memory_info()
+        
         save_images(webpage, visuals, img_path, width=opt.display_winsize)
+        
+        # Clear memory periodically to prevent accumulation
+        if len(opt.gpu_ids) > 0 and i % opt.memory_clear_freq == 0:
+            util.clear_cuda_memory()
+    
     webpage.save()  # save the HTML
+    
+    # Final cleanup
+    print("Testing completed. Final memory cleanup...")
+    if len(opt.gpu_ids) > 0:
+        util.cleanup_model_memory(model)
+        print("Final CUDA memory usage:")
+        util.print_cuda_memory_info()
