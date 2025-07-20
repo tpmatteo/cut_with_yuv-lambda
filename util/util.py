@@ -172,6 +172,7 @@ def rgb_to_yuv(img):
     Assumes input in [-1, 1] range.
     Output is also in [-1, 1] range.
     """
+    original_shape = img.shape
     if img.dim() == 3:
         img = img.unsqueeze(0)
     r, g, b = img[:, 0:1, :, :], img[:, 1:2, :, :], img[:, 2:3, :, :]
@@ -179,7 +180,10 @@ def rgb_to_yuv(img):
     u = -0.14713 * r - 0.28886 * g + 0.436 * b
     v = 0.615 * r - 0.51499 * g - 0.10001 * b
     yuv = torch.cat([y, u, v], dim=1)
-    return yuv.squeeze(0) if img.shape[0] == 1 else yuv
+    # Preserve the original shape
+    if len(original_shape) == 3:
+        yuv = yuv.squeeze(0)
+    return yuv
 
 
 def yuv_to_rgb(img):
@@ -188,6 +192,7 @@ def yuv_to_rgb(img):
     Assumes input in [-1, 1] range.
     Output is also in [-1, 1] range.
     """
+    original_shape = img.shape
     if img.dim() == 3:
         img = img.unsqueeze(0)
     y, u, v = img[:, 0:1, :, :], img[:, 1:2, :, :], img[:, 2:3, :, :]
@@ -196,4 +201,7 @@ def yuv_to_rgb(img):
     b = y + 2.03211 * u
     rgb = torch.cat([r, g, b], dim=1)
     rgb = torch.clamp(rgb, -1, 1)
-    return rgb.squeeze(0) if img.shape[0] == 1 else rgb
+    # Preserve the original shape
+    if len(original_shape) == 3:
+        rgb = rgb.squeeze(0)
+    return rgb
