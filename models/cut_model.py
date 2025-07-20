@@ -66,6 +66,10 @@ class CUTModel(BaseModel):
             self.loss_names += ['NCE_Y']
             self.visual_names += ['idt_B']
 
+        # Add Y channel NCE loss name if lambda_NCE_Y > 0
+        if hasattr(opt, 'lambda_NCE_Y') and opt.lambda_NCE_Y > 0.0 and self.isTrain:
+            self.loss_names += ['NCE_Y_channel']
+
         if self.isTrain:
             self.model_names = ['G', 'F', 'D']
         else:  # during test time, only load G
@@ -159,13 +163,26 @@ class CUTModel(BaseModel):
     def compute_D_loss(self):
         """Calculate GAN loss for the discriminator"""
         fake = self.fake_B.detach()
-        # Fake; stop backprop to the generator by detaching fake_B
-        pred_fake = self.netD(fake)
-        self.loss_D_fake = self.criterionGAN(pred_fake, False).mean()
-        # Real
-        self.pred_real = self.netD(self.real_B)
-        loss_D_real = self.criterionGAN(self.pred_real, True)
-        self.loss_D_real = loss_D_real.mean()
+        
+        # Convert to YUV if specified for discriminator
+        if hasattr(self.opt, 'yuv') and self.opt.yuv:
+            fake_yuv = util.rgb_to_yuv(fake)
+            real_B_yuv = util.rgb_to_yuv(self.real_B)
+            # Fake; stop backprop to the generator by detaching fake_B
+            pred_fake = self.netD(fake_yuv)
+            self.loss_D_fake = self.criterionGAN(pred_fake, False).mean()
+            # Real
+            self.pred_real = self.netD(real_B_yuv)
+            loss_D_real = self.criterionGAN(self.pred_real, True)
+            self.loss_D_real = loss_D_real.mean()
+        else:
+            # Fake; stop backprop to the generator by detaching fake_B
+            pred_fake = self.netD(fake)
+            self.loss_D_fake = self.criterionGAN(pred_fake, False).mean()
+            # Real
+            self.pred_real = self.netD(self.real_B)
+            loss_D_real = self.criterionGAN(self.pred_real, True)
+            self.loss_D_real = loss_D_real.mean()
 
         # combine loss and calculate gradients
         self.loss_D = (self.loss_D_fake + self.loss_D_real) * 0.5
@@ -176,7 +193,11 @@ class CUTModel(BaseModel):
         fake = self.fake_B
         # First, G(A) should fake the discriminator
         if self.opt.lambda_GAN > 0.0:
-            pred_fake = self.netD(fake)
+            if hasattr(self.opt, 'yuv') and self.opt.yuv:
+                fake_yuv = util.rgb_to_yuv(fake)
+                pred_fake = self.netD(fake_yuv)
+            else:
+                pred_fake = self.netD(fake)
             self.loss_G_GAN = self.criterionGAN(pred_fake, True).mean() * self.opt.lambda_GAN
         else:
             self.loss_G_GAN = 0.0
@@ -192,23 +213,67 @@ class CUTModel(BaseModel):
         else:
             loss_NCE_both = self.loss_NCE
 
+        # Add Y channel specific NCE loss if lambda_NCE_Y > 0
+        if hasattr(self.opt, 'lambda_NCE_Y') and self.opt.lambda_NCE_Y > 0.0:
+            self.loss_NCE_Y_channel = self.calculate_Y_channel_NCE_loss(self.real_A, self.fake_B)
+            loss_NCE_both += self.loss_NCE_Y_channel * self.opt.lambda_NCE_Y
+        else:
+            self.loss_NCE_Y_channel = 0.0
+
         self.loss_G = self.loss_G_GAN + loss_NCE_both
         return self.loss_G
 
     def calculate_NCE_loss(self, src, tgt):
         n_layers = len(self.nce_layers)
-        feat_q = self.netG(tgt, self.nce_layers, encode_only=True)
+        
+        # Convert to YUV if specified
+        if hasattr(self.opt, 'yuv') and self.opt.yuv:
+            src_yuv = util.rgb_to_yuv(src)
+            tgt_yuv = util.rgb_to_yuv(tgt)
+            feat_q = self.netG(tgt_yuv, self.nce_layers, encode_only=True)
+            feat_k = self.netG(src_yuv, self.nce_layers, encode_only=True)
+        else:
+            feat_q = self.netG(tgt, self.nce_layers, encode_only=True)
+            feat_k = self.netG(src, self.nce_layers, encode_only=True)
 
         if self.opt.flip_equivariance and self.flipped_for_equivariance:
             feat_q = [torch.flip(fq, [3]) for fq in feat_q]
 
-        feat_k = self.netG(src, self.nce_layers, encode_only=True)
         feat_k_pool, sample_ids = self.netF(feat_k, self.opt.num_patches, None)
         feat_q_pool, _ = self.netF(feat_q, self.opt.num_patches, sample_ids)
 
         total_nce_loss = 0.0
         for f_q, f_k, crit, nce_layer in zip(feat_q_pool, feat_k_pool, self.criterionNCE, self.nce_layers):
             loss = crit(f_q, f_k) * self.opt.lambda_NCE
+            total_nce_loss += loss.mean()
+
+        return total_nce_loss / n_layers
+
+    def calculate_Y_channel_NCE_loss(self, src, tgt):
+        """Calculate NCE loss specifically on the Y channel of YUV color space"""
+        n_layers = len(self.nce_layers)
+        
+        # Convert to YUV and extract Y channel only
+        src_yuv = util.rgb_to_yuv(src)
+        tgt_yuv = util.rgb_to_yuv(tgt)
+        
+        # Extract Y channel (luminance) - first channel and repeat to 3 channels
+        # since the generator expects 3-channel input
+        src_y = src_yuv[:, 0:1, :, :].repeat(1, 3, 1, 1)
+        tgt_y = tgt_yuv[:, 0:1, :, :].repeat(1, 3, 1, 1)
+        
+        feat_q = self.netG(tgt_y, self.nce_layers, encode_only=True)
+        feat_k = self.netG(src_y, self.nce_layers, encode_only=True)
+
+        if self.opt.flip_equivariance and self.flipped_for_equivariance:
+            feat_q = [torch.flip(fq, [3]) for fq in feat_q]
+
+        feat_k_pool, sample_ids = self.netF(feat_k, self.opt.num_patches, None)
+        feat_q_pool, _ = self.netF(feat_q, self.opt.num_patches, sample_ids)
+
+        total_nce_loss = 0.0
+        for f_q, f_k, crit, nce_layer in zip(feat_q_pool, feat_k_pool, self.criterionNCE, self.nce_layers):
+            loss = crit(f_q, f_k)  # Don't multiply by lambda_NCE here as it's handled in compute_G_loss
             total_nce_loss += loss.mean()
 
         return total_nce_loss / n_layers

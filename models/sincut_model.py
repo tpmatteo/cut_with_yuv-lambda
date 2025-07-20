@@ -1,5 +1,6 @@
 import torch
 from .cut_model import CUTModel
+import util.util as util
 
 
 class SinCUTModel(CUTModel):
@@ -62,9 +63,16 @@ class SinCUTModel(CUTModel):
                 self.loss_names += ['idt']
 
     def compute_D_loss(self):
-        self.real_B.requires_grad_()
-        GAN_loss_D = super().compute_D_loss()
-        self.loss_D_R1 = self.R1_loss(self.pred_real, self.real_B)
+        # Convert to YUV if specified for R1 loss computation
+        if hasattr(self.opt, 'yuv') and self.opt.yuv:
+            self.real_B_yuv = util.rgb_to_yuv(self.real_B)
+            self.real_B_yuv.requires_grad_()
+            GAN_loss_D = super().compute_D_loss()
+            self.loss_D_R1 = self.R1_loss(self.pred_real, self.real_B_yuv)
+        else:
+            self.real_B.requires_grad_()
+            GAN_loss_D = super().compute_D_loss()
+            self.loss_D_R1 = self.R1_loss(self.pred_real, self.real_B)
         self.loss_D = GAN_loss_D + self.loss_D_R1
         return self.loss_D
 

@@ -40,5 +40,9 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--lr_policy', type=str, default='linear', help='learning rate policy. [linear | step | plateau | cosine]')
         parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
 
+        # Add YUV and lambda_NCE_Y options for CUT
+        parser.add_argument('--yuv', action='store_true', help='If specified, use YUV color space for NCE loss and optionally GAN')
+        parser.add_argument('--lambda_NCE_Y', type=float, default=0.0, help='weight for NCE loss on Y channel in YUV')
+
         self.isTrain = True
         return parser

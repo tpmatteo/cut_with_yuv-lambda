@@ -164,3 +164,36 @@ def correct_resize(t, size, mode=Image.BICUBIC):
         resized_t = torchvision.transforms.functional.to_tensor(one_image) * 2 - 1.0
         resized.append(resized_t)
     return torch.stack(resized, dim=0).to(device)
+
+
+def rgb_to_yuv(img):
+    """
+    Convert a torch tensor image (B,C,H,W) or (C,H,W) from RGB to YUV.
+    Assumes input in [-1, 1] range.
+    Output is also in [-1, 1] range.
+    """
+    if img.dim() == 3:
+        img = img.unsqueeze(0)
+    r, g, b = img[:, 0:1, :, :], img[:, 1:2, :, :], img[:, 2:3, :, :]
+    y = 0.299 * r + 0.587 * g + 0.114 * b
+    u = -0.14713 * r - 0.28886 * g + 0.436 * b
+    v = 0.615 * r - 0.51499 * g - 0.10001 * b
+    yuv = torch.cat([y, u, v], dim=1)
+    return yuv.squeeze(0) if img.shape[0] == 1 else yuv
+
+
+def yuv_to_rgb(img):
+    """
+    Convert a torch tensor image (B,C,H,W) or (C,H,W) from YUV to RGB.
+    Assumes input in [-1, 1] range.
+    Output is also in [-1, 1] range.
+    """
+    if img.dim() == 3:
+        img = img.unsqueeze(0)
+    y, u, v = img[:, 0:1, :, :], img[:, 1:2, :, :], img[:, 2:3, :, :]
+    r = y + 1.13983 * v
+    g = y - 0.39465 * u - 0.58060 * v
+    b = y + 2.03211 * u
+    rgb = torch.cat([r, g, b], dim=1)
+    rgb = torch.clamp(rgb, -1, 1)
+    return rgb.squeeze(0) if img.shape[0] == 1 else rgb
